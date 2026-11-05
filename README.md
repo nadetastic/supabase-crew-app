@@ -10,6 +10,14 @@ It adds:
 
 ## Install
 
+### From the dashboard (no clone)
+
+1. Go to Apps, then Discover, then Manage app sources.
+2. Add `https://github.com/nadetastic/supabase-crew-app` as a source.
+3. Find Supabase in Discover and select Install.
+
+### From the command line
+
 ```bash
 git clone https://github.com/nadetastic/supabase-crew-app.git
 kirocrew app install ./supabase-crew-app
