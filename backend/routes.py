@@ -6,6 +6,7 @@ sign-in. No new port is opened.
   GET    /api/apps/supabase/status          -> connection state + saved overview
   POST   /api/apps/supabase/oauth/start     -> Supabase authorize URL to redirect to
   GET    /api/apps/supabase/oauth/callback  -> finishes sign-in, redirects back
+  POST   /api/apps/supabase/oauth/finish    -> finishes sign-in from a pasted address
   POST   /api/apps/supabase/refresh         -> reads orgs/projects/tables now
   POST   /api/apps/supabase/oauth/disconnect-> forgets the Supabase tokens
 
@@ -30,7 +31,7 @@ import secrets
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from aiohttp import web
 
@@ -435,18 +436,16 @@ if (result.result === "connected") window.setTimeout(() => window.close(), 800);
     )
 
 
-async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
-    if denied := _require_auth(request):
-        return denied
-    state = str(request.query.get("state") or "")
+async def _complete(ctx, state: str, code: str, error: str) -> str:
+    """Finish a sign-in. Returns connected | denied | failed | expired."""
     async with _lock:
         pending = _read(ctx, PENDING_FILE)
         entry = pending.pop(state, None) if state else None
         _write_private(ctx, PENDING_FILE, pending)
     if not isinstance(entry, dict) or time.time() - float(entry.get("created_at") or 0) > PENDING_TTL_S:
-        return _done_page("expired")
-    if request.query.get("error") or not request.query.get("code"):
-        return _done_page("denied")
+        return "expired"
+    if error or not code:
+        return "denied"
     conn = _read(ctx, OAUTH_FILE)
     client = conn.get("client") or {}
     status, body = await _http(
@@ -454,7 +453,7 @@ async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
         TOKEN_URL,
         data={
             "grant_type": "authorization_code",
-            "code": request.query["code"],
+            "code": code,
             "redirect_uri": entry["redirect_uri"],
             "code_verifier": entry["verifier"],
             "client_id": client.get("client_id", ""),
@@ -463,13 +462,53 @@ async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
     )
     if status >= 300 or not isinstance(body, dict):
         logger.warning("supabase code exchange failed: status=%s", status)
-        return _done_page("failed")
+        return "failed"
     try:
         _store_tokens(ctx, {"client": client}, body)
     except SupabaseError:
-        return _done_page("failed")
+        return "failed"
     _delete(ctx, OVERVIEW_FILE)  # a new account should not show the old one's data
-    return _done_page("connected")
+    return "connected"
+
+
+async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
+    """Supabase redirects here. Works when this browser is signed in to Kiro Crew."""
+    if denied := _require_auth(request):
+        return denied
+    q = request.query
+    result = await _complete(
+        ctx, str(q.get("state") or ""), str(q.get("code") or ""), str(q.get("error") or "")
+    )
+    return _done_page(result)
+
+
+async def h_oauth_finish(request: web.Request, ctx) -> web.Response:
+    """Finish from a pasted callback address, for a browser not signed in to Kiro Crew.
+
+    The code is single-use, expires in minutes, and is useless without the PKCE
+    verifier and client secret that never leave this backend.
+    """
+    if denied := _require_auth(request):
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw = str(body.get("url") or "").strip()
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        parts = None
+    if not parts or parts.path != CALLBACK_PATH:
+        return web.json_response(
+            {"error": "That is not the Supabase sign-in address. Copy the full address from the browser tab after you approve."},
+            status=400,
+        )
+    q = parse_qs(parts.query)
+    first = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+    result = await _complete(ctx, first("state"), first("code"), first("error"))
+    status = 200 if result == "connected" else 400
+    return web.json_response({"result": result, **_status_body(ctx)}, status=status)
 
 
 async def h_refresh(request: web.Request, ctx) -> web.Response:
@@ -500,6 +539,7 @@ def register_routes(ctx) -> list[AppRoute]:
         AppRoute("GET", "/status", h_status),
         AppRoute("POST", "/oauth/start", h_oauth_start),
         AppRoute("GET", "/oauth/callback", h_oauth_callback),
+        AppRoute("POST", "/oauth/finish", h_oauth_finish),
         AppRoute("POST", "/oauth/disconnect", h_disconnect),
         AppRoute("POST", "/refresh", h_refresh),
     ]
