@@ -36,9 +36,16 @@ Pick the `supabase` agent in the agent picker, or ask any agent about Supabase w
 
 The app adds a Supabase page to the sidebar. It lists your organizations, projects (region, status, link to the Supabase dashboard) and the tables in each project's `public` schema.
 
-Select Refresh to load it. A refresh starts the read-only `supabase-overview` agent, which calls `list_organizations`, `list_projects` and `list_tables` on the hosted Supabase MCP server, then saves the result with the app's own `save_overview` tool. A refresh takes about 10 to 30 seconds and uses credits. The page itself never talks to Supabase and stores no Supabase token.
+Select **Sign in with Supabase**. You go to Supabase, approve read access, and land back on the page, which then loads your account. Refresh reloads it in a second or two and uses no credits. **Sign out** forgets the Supabase tokens.
 
-If the page says Supabase needs sign-in, ask the `supabase` agent in a chat to "list my Supabase projects" once. That completes the Supabase OAuth sign-in. Then refresh the page.
+How it works:
+
+- Sign-in is Supabase's own OAuth (authorization code with PKCE). The app registers itself with Supabase on first use, so there is nothing to configure.
+- It asks for `organizations:read`, `projects:read` and `database:read`.
+- Tokens are stored in the app's data directory with file mode 0600 and never reach the browser.
+- The page reads the Supabase Management API: `/v1/organizations`, `/v1/projects`, and a `select` on `information_schema.tables` for each healthy project.
+
+This sign-in is separate from the MCP server's sign-in that the `supabase` agent uses in chat.
 
 To scope the MCP server to one project or make it read-only, edit the `url` in `app.json`, for example:
 
@@ -59,12 +66,9 @@ Then reinstall the app.
 supabase-crew-app/
 ├── app.json
 ├── agents/
-│   ├── supabase.json             ← chat agent
-│   └── supabase-overview.json    ← read-only background agent for the page
+│   └── supabase.json             ← chat agent
 ├── backend/
-│   └── routes.py                 ← /api/apps/supabase/overview and /refresh
-├── mcp/
-│   └── server.py                 ← save_overview tool (stdlib only)
+│   └── routes.py                 ← Supabase sign-in and /api/apps/supabase routes
 ├── ui/
 │   └── index.mjs                 ← Supabase page
 ├── assets/

@@ -1,12 +1,11 @@
 // Supabase page for Kiro Crew.
 // Shows your Supabase organizations and projects. The data comes from the
-// app backend (/api/apps/supabase), which a background agent fills using the
-// hosted Supabase MCP server. This page never talks to Supabase directly.
+// app backend (/api/apps/supabase), which reads Supabase with the
+// app backend's own Supabase OAuth sign-in. Tokens never reach this page.
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { jsx as h, jsxs as hs } from 'react/jsx-runtime'
 
 const API = '/api/apps/supabase'
-const POLL_MS = 3000
 
 async function api(path, opts) {
   const r = await fetch(API + path, {
@@ -124,46 +123,83 @@ function OrgCard({ org, projects }) {
 
 export default function SupabaseApp() {
   const [data, setData] = useState(null)
-  const [loadError, setLoadError] = useState('')
-  const [starting, setStarting] = useState(false)
-  const timer = useRef(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')  // '', 'refresh', 'signin', 'signout'
+  const [notice, setNotice] = useState('')
 
   const load = useCallback(async () => {
     try {
-      const d = await api('/overview')
+      const d = await api('/status')
       setData(d)
-      setLoadError('')
+      setError('')
       return d
     } catch (e) {
-      setLoadError(e.message)
+      setError(e.message)
       return null
     }
   }, [])
 
-  // Poll while a refresh is running.
-  useEffect(() => {
-    load()
-    return () => clearTimeout(timer.current)
-  }, [load])
-  useEffect(() => {
-    clearTimeout(timer.current)
-    if (data?.refreshing) timer.current = setTimeout(load, POLL_MS)
-  }, [data, load])
-
-  const refresh = async () => {
-    setStarting(true)
+  const refresh = useCallback(async () => {
+    setBusy('refresh')
     try {
-      await api('/refresh', { method: 'POST', body: '{}' })
-      await load()
+      const d = await api('/refresh', { method: 'POST', body: '{}' })
+      setData(d)
+      setError('')
     } catch (e) {
-      setLoadError(e.message)
+      setError(e.message)
+      load()
     } finally {
-      setStarting(false)
+      setBusy('')
+    }
+  }, [load])
+
+  // On load, read the result of a sign-in redirect (?supabase=...), then tidy the URL.
+  const first = useRef(true)
+  useEffect(() => {
+    if (!first.current) return
+    first.current = false
+    const params = new URLSearchParams(window.location.search)
+    const result = params.get('supabase')
+    if (result) {
+      params.delete('supabase')
+      const qs = params.toString()
+      window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash)
+    }
+    if (result === 'denied') setNotice('Supabase sign-in was canceled.')
+    if (result === 'failed') setError('Supabase sign-in did not finish. Try again.')
+    load().then((d) => {
+      if (result === 'connected' && d?.connected) refresh()
+    })
+  }, [load, refresh])
+
+  const signIn = async () => {
+    setBusy('signin')
+    try {
+      const d = await api('/oauth/start', {
+        method: 'POST',
+        body: JSON.stringify({ origin: window.location.origin, return_to: window.location.pathname }),
+      })
+      window.location.assign(d.authorizationUrl)
+    } catch (e) {
+      setError(e.message)
+      setBusy('')
     }
   }
 
+  const signOut = async () => {
+    setBusy('signout')
+    try {
+      setData(await api('/oauth/disconnect', { method: 'POST', body: '{}' }))
+      setNotice('Signed out of Supabase.')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const connected = !!data?.connected
   const ov = data?.overview
-  const refreshing = starting || !!data?.refreshing
   const orgs = ov?.organizations || []
   const projects = ov?.projects || []
   const known = new Set(orgs.map((o) => o.id))
@@ -171,24 +207,33 @@ export default function SupabaseApp() {
   const groups = orgs.map((o) => ({ org: o, projects: projects.filter((p) => p.organization_id === o.id) }))
   if (orphans.length) groups.push({ org: { id: '_other', name: 'Other projects' }, projects: orphans })
   const tableCount = projects.reduce((n, p) => n + (Array.isArray(p.tables) ? p.tables.length : 0), 0)
+  const ghost = { ...S.button(!!busy), background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)' }
 
-  const children = [
-    hs('div', { key: 'head', style: S.header, children: [
-      h('h1', { style: S.title, children: 'Supabase' }),
-      ov?.updated_at ? h('span', { style: S.muted, children: `Updated ${timeAgo(ov.updated_at)}` }) : null,
-      h('div', { style: S.spacer }),
-      h('button', { style: S.button(refreshing), disabled: refreshing, onClick: refresh, children: refreshing ? 'Refreshing…' : 'Refresh' }),
-    ] }),
+  const head = [
+    h('h1', { key: 't', style: S.title, children: 'Supabase' }),
+    ov?.updated_at ? h('span', { key: 'u', style: S.muted, children: `Updated ${timeAgo(ov.updated_at)}` }) : null,
+    h('div', { key: 's', style: S.spacer }),
   ]
+  if (connected) {
+    head.push(h('button', { key: 'r', style: S.button(!!busy), disabled: !!busy, onClick: refresh, children: busy === 'refresh' ? 'Refreshing…' : 'Refresh' }))
+    head.push(h('button', { key: 'o', style: ghost, disabled: !!busy, onClick: signOut, children: 'Sign out' }))
+  }
+  const children = [hs('div', { key: 'head', style: S.header, children: head })]
 
-  if (refreshing) children.push(h('div', { key: 'busy', style: S.banner('info'), children: 'An agent is reading your Supabase account. This takes about 10 to 30 seconds.' }))
-  if (loadError) children.push(h('div', { key: 'le', style: S.banner('error'), children: loadError }))
-  if (data?.refresh_error) children.push(h('div', { key: 're', style: S.banner('error'), children: data.refresh_error }))
-  if (ov?.error) children.push(h('div', { key: 'oe', style: S.banner('error'), children: `Last refresh: ${ov.error}. If Supabase needs sign-in, ask the supabase agent in a chat to "list my Supabase projects" once, then refresh here.` }))
+  if (notice) children.push(h('div', { key: 'n', style: S.banner('info'), children: notice }))
+  if (error) children.push(h('div', { key: 'e', style: S.banner('error'), children: error }))
 
-  if (!ov && data && !refreshing) {
-    children.push(h('div', { key: 'empty', style: { ...S.card, ...S.empty }, children: 'No data yet. Select Refresh to load your organizations and projects.' }))
-  } else if (ov && !ov.error) {
+  if (!data) {
+    if (!error) children.push(h('div', { key: 'l', style: { ...S.card, ...S.empty }, children: 'Loading…' }))
+  } else if (!connected) {
+    children.push(hs('div', { key: 'signin', style: { ...S.card, ...S.empty }, children: [
+      h('div', { style: { color: 'var(--text)', fontSize: '15px', fontWeight: 500, marginBottom: '6px' }, children: 'Sign in to see your Supabase organizations and projects' }),
+      h('div', { style: { marginBottom: '16px' }, children: 'You will go to Supabase to approve read access, then come back here.' }),
+      h('button', { style: S.button(!!busy), disabled: !!busy, onClick: signIn, children: busy === 'signin' ? 'Opening Supabase…' : 'Sign in with Supabase' }),
+    ] }))
+  } else if (!ov) {
+    children.push(h('div', { key: 'empty', style: { ...S.card, ...S.empty }, children: busy === 'refresh' ? 'Reading your Supabase account…' : 'Signed in. Select Refresh to load your organizations and projects.' }))
+  } else {
     children.push(hs('div', { key: 'stats', style: S.stats, children: [
       ['Organizations', orgs.length], ['Projects', projects.length], ['Public tables', tableCount],
     ].map(([label, n]) => hs('div', { style: S.stat, children: [
