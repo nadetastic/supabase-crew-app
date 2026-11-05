@@ -172,17 +172,70 @@ export default function SupabaseApp() {
     })
   }, [load, refresh])
 
+  // Wait until the popup reports back, or /status shows we are signed in.
+  const waitForSignIn = (popup) => new Promise((resolve) => {
+    let done = false
+    let checking = false
+    const finish = (result) => {
+      if (done) return
+      done = true
+      window.removeEventListener('message', onMessage)
+      clearInterval(poll)
+      clearTimeout(timeout)
+      resolve(result)
+    }
+    const signedIn = async () => {
+      if (checking) return false
+      checking = true
+      try { return !!(await api('/status'))?.connected } catch { return false } finally { checking = false }
+    }
+    const onMessage = (event) => {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type !== 'supabase-oauth-complete') return
+      finish(event.data.result)
+    }
+    window.addEventListener('message', onMessage)
+    const poll = setInterval(async () => {
+      if (await signedIn()) { finish('connected'); return }
+      if (popup && popup.closed) finish((await signedIn()) ? 'connected' : 'closed')
+    }, 1000)
+    const timeout = setTimeout(() => finish('timeout'), 5 * 60 * 1000)
+  })
+
   const signIn = async () => {
+    // Open the window first, inside the click, so it is not blocked as a popup.
+    const popup = window.open('about:blank', 'supabase-oauth-' + Date.now(), 'popup=yes,width=560,height=760')
+    if (!popup) {
+      setError('The sign-in window was blocked. Allow popups for Kiro Crew and try again.')
+      return
+    }
     setBusy('signin')
+    setError('')
+    setNotice('')
     try {
       const d = await api('/oauth/start', {
         method: 'POST',
         body: JSON.stringify({ origin: window.location.origin, return_to: window.location.pathname }),
       })
-      window.location.assign(d.authorizationUrl)
+      if (!d?.authorizationUrl) throw new Error('Supabase returned no sign-in link.')
+      popup.location.replace(d.authorizationUrl)
+      const result = await waitForSignIn(popup)
+      try { popup.close() } catch { /* already closed */ }
+      if (result === 'connected') {
+        await load()
+        await refresh()
+      } else if (result === 'denied') {
+        setNotice('Supabase sign-in was canceled.')
+      } else if (result === 'closed') {
+        setNotice('The sign-in window was closed before it finished.')
+      } else {
+        setError(result === 'timeout' ? 'Supabase sign-in timed out. Try again.' : 'Supabase sign-in did not finish. Try again.')
+      }
     } catch (e) {
+      try { popup.close() } catch { /* already closed */ }
       setError(e.message)
-      setBusy('')
+    } finally {
+      setBusy((b) => (b === 'signin' ? '' : b))
     }
   }
 
@@ -229,7 +282,7 @@ export default function SupabaseApp() {
     children.push(hs('div', { key: 'signin', style: { ...S.card, ...S.empty }, children: [
       h('div', { style: { color: 'var(--text)', fontSize: '15px', fontWeight: 500, marginBottom: '6px' }, children: 'Sign in to see your Supabase organizations and projects' }),
       h('div', { style: { marginBottom: '16px' }, children: 'You will go to Supabase to approve read access, then come back here.' }),
-      h('button', { style: S.button(!!busy), disabled: !!busy, onClick: signIn, children: busy === 'signin' ? 'Opening Supabase…' : 'Sign in with Supabase' }),
+      h('button', { style: S.button(!!busy), disabled: !!busy, onClick: signIn, children: busy === 'signin' ? 'Waiting for Supabase…' : 'Sign in with Supabase' }),
     ] }))
   } else if (!ov) {
     children.push(h('div', { key: 'empty', style: { ...S.card, ...S.empty }, children: busy === 'refresh' ? 'Reading your Supabase account…' : 'Signed in. Select Refresh to load your organizations and projects.' }))

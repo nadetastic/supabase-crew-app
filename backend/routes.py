@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import html
 import ipaddress
 import json
 import logging
@@ -396,9 +397,42 @@ async def h_oauth_start(request: web.Request, ctx) -> web.Response:
     return web.json_response({"authorizationUrl": url})
 
 
-def _back(return_to: str, result: str) -> web.Response:
-    sep = "&" if "?" in return_to else "?"
-    return web.Response(status=302, headers={"Location": f"{return_to}{sep}supabase={result}"})
+_PAGE_TEXT = {
+    "connected": ("Supabase connected", "You can close this window and go back to Kiro Crew."),
+    "denied": ("Sign-in canceled", "Supabase sign-in was canceled. You can close this window."),
+    "failed": ("Sign-in did not finish", "Supabase sign-in did not finish. Close this window and try again."),
+    "expired": ("Link expired", "This sign-in link expired or was already used. Close this window and try again."),
+}
+
+
+def _done_page(result: str) -> web.Response:
+    """Small popup page: tells the opener the result, then closes. No token or code is shown."""
+    title, message = _PAGE_TEXT.get(result, _PAGE_TEXT["failed"])
+    payload = json.dumps({"type": "supabase-oauth-complete", "result": result}).replace("<", "\\u003c")
+    doc = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title></head>
+<body style="margin:0;background:#111827;color:#f9fafb;font:14px system-ui,sans-serif">
+<main style="max-width:440px;margin:72px auto;padding:24px">
+<h1 style="font-size:20px;margin:0 0 10px">{html.escape(title)}</h1>
+<p style="line-height:1.6;color:#d1d5db">{html.escape(message)}</p>
+<button type="button" onclick="window.close()" style="margin-top:12px;padding:8px 14px;border:1px solid #4b5563;border-radius:6px;background:#1f2937;color:#f9fafb;cursor:pointer">Close</button>
+</main>
+<script>
+const result = {payload};
+if (window.opener) window.opener.postMessage(result, window.location.origin);
+if (result.result === "connected") window.setTimeout(() => window.close(), 800);
+</script></body></html>"""
+    return web.Response(
+        text=doc,
+        content_type="text/html",
+        status=200 if result == "connected" else 400,
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Frame-Options": "DENY",
+        },
+    )
 
 
 async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
@@ -410,13 +444,9 @@ async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
         entry = pending.pop(state, None) if state else None
         _write_private(ctx, PENDING_FILE, pending)
     if not isinstance(entry, dict) or time.time() - float(entry.get("created_at") or 0) > PENDING_TTL_S:
-        return web.Response(
-            text="This Supabase sign-in link expired or was already used. Go back to Kiro Crew and try again.",
-            status=400,
-        )
-    return_to = _safe_return_to(entry.get("return_to") or "/")
+        return _done_page("expired")
     if request.query.get("error") or not request.query.get("code"):
-        return _back(return_to, "denied")
+        return _done_page("denied")
     conn = _read(ctx, OAUTH_FILE)
     client = conn.get("client") or {}
     status, body = await _http(
@@ -433,13 +463,13 @@ async def h_oauth_callback(request: web.Request, ctx) -> web.Response:
     )
     if status >= 300 or not isinstance(body, dict):
         logger.warning("supabase code exchange failed: status=%s", status)
-        return _back(return_to, "failed")
+        return _done_page("failed")
     try:
         _store_tokens(ctx, {"client": client}, body)
     except SupabaseError:
-        return _back(return_to, "failed")
+        return _done_page("failed")
     _delete(ctx, OVERVIEW_FILE)  # a new account should not show the old one's data
-    return _back(return_to, "connected")
+    return _done_page("connected")
 
 
 async def h_refresh(request: web.Request, ctx) -> web.Response:
