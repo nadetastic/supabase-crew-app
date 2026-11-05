@@ -1,8 +1,8 @@
 {
   "name": "supabase",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Supabase",
-  "description": "Build fullstack applications with Supabase's Postgres database, authentication, storage, and real-time subscriptions. Ports the Supabase Hosted Kiro Power to Kiro Crew.",
+  "description": "Build fullstack applications with Supabase's Postgres database, authentication, storage, and real-time subscriptions. Ports the Supabase Hosted Kiro Power to Kiro Crew, and adds a page that lists your Supabase organizations and projects.",
   "author": "nadetastic",
   "iconPath": "assets/icon.png",
   "tags": [
@@ -17,17 +17,51 @@
   ],
   "highlights": [
     "Connects to the hosted Supabase MCP server at mcp.supabase.com",
+    "A Supabase page that lists your organizations, projects and public tables",
     "A Supabase agent that reads the right guide before it touches your database",
     "Guides for SQL style, migrations, RLS policies, Postgres functions, Edge Functions, Next.js auth and Realtime"
   ],
+  "permissions": {
+    "api": [
+      "/api/apps/supabase",
+      "/api/apps/supabase/*"
+    ],
+    "spawn": true,
+    "storage": true
+  },
   "mcpServers": {
     "supabase": {
       "url": "https://mcp.supabase.com/mcp",
       "disabled": false
+    },
+    "overview": {
+      "command": "python3",
+      "args": [
+        "mcp/server.py"
+      ],
+      "autoApprove": [
+        "save_overview"
+      ]
     }
   },
+  "backend": {
+    "hooks": {
+      "routes": "backend.routes:register_routes"
+    }
+  },
+  "ui": {
+    "entry": "index.mjs",
+    "pages": [
+      {
+        "route": "/supabase",
+        "label": "Supabase",
+        "icon": "Database"
+      }
+    ]
+  },
   "agents": [
-    "agents/supabase.json"
+    "agents/supabase.json",
+    "agents/supabase-overview.json"
   ],
   "skills": [
     "skills/supabase-hosted"

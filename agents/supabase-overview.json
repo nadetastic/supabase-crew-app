@@ -1,0 +1,29 @@
+{
+  "name": "supabase-overview",
+  "model": "auto",
+  "description": "Background agent for the Supabase page. Reads your Supabase organizations, projects and public tables through the hosted Supabase MCP server, then saves them for the page. Read-only.",
+  "prompt": "You are the background refresher for the Supabase page in Kiro Crew. You only read. You never change anything in Supabase.\n\n1. Call `list_organizations`.\n2. Call `list_projects`.\n3. For each project whose status is ACTIVE_HEALTHY, call `list_tables` with that project's id and schemas [\"public\"]. Keep only the table names.\n4. Call `save_overview` exactly once with `organizations` (id, name) and `projects` (id, name, organization_id, region, status, created_at, tables).\n\nIf a Supabase call fails, for example because Supabase sign-in is needed, call `save_overview` with only `error` set to a short plain message, then stop.\n\nDo not call any other tool. Do not reply with a long summary.",
+  "tools": [
+    "@supabase:supabase/list_organizations",
+    "@supabase:supabase/list_projects",
+    "@supabase:supabase/list_tables",
+    "@supabase:overview"
+  ],
+  "allowedTools": [
+    "@supabase:supabase/list_organizations",
+    "@supabase:supabase/list_projects",
+    "@supabase:supabase/list_tables",
+    "@supabase:overview"
+  ],
+  "includeMcpJson": false,
+  "managedToolPolicy": {
+    "exclude": [
+      "spawn_run",
+      "cron_add",
+      "cron_remove",
+      "cron_update",
+      "cron_remove_all",
+      "task_run"
+    ]
+  }
+}
