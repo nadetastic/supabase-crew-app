@@ -1,0 +1,40 @@
+{
+  "name": "supabase",
+  "version": "0.1.0",
+  "displayName": "Supabase",
+  "description": "Build fullstack applications with Supabase's Postgres database, authentication, storage, and real-time subscriptions. Ports the Supabase Hosted Kiro Power to Kiro Crew.",
+  "author": "nadetastic",
+  "iconPath": "assets/icon.png",
+  "tags": [
+    "database",
+    "postgres",
+    "auth",
+    "storage",
+    "realtime",
+    "backend",
+    "supabase",
+    "rls"
+  ],
+  "highlights": [
+    "Connects to the hosted Supabase MCP server at mcp.supabase.com",
+    "A Supabase agent that reads the right guide before it touches your database",
+    "Guides for SQL style, migrations, RLS policies, Postgres functions, Edge Functions, Next.js auth and Realtime"
+  ],
+  "mcpServers": {
+    "supabase": {
+      "url": "https://mcp.supabase.com/mcp",
+      "disabled": false
+    }
+  },
+  "agents": [
+    "agents/supabase.json"
+  ],
+  "skills": [
+    "skills/supabase-hosted"
+  ],
+  "dependencies": {
+    "commands": [
+      "npx"
+    ]
+  }
+}
